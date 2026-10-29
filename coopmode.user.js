@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         AMQ Coop Mode
 // @namespace    https://github.com/denerou/AMQ_Coop_Mode
-// @version      2.3
+// @version      2.4
 // @description  
-// @author       denero
+// @author       denerou
 // @license      MIT
 // @match        https://animemusicquiz.com/*
 // @match        https://*.animemusicquiz.com/*
@@ -18,9 +18,9 @@
 (function () {
     'use strict';
 
-    /* ============ Конфиг ============ */
-
     const ANSWER_INPUT_SELECTORS = [
+        '.awesomplete > input[type="text"]',
+        '.awesomplete input[type="text"]',
         '#qpAnswerInput',
         '#answerInput',
         '.awesomplete input',
@@ -34,29 +34,37 @@
     const STORAGE_POS  = 'amq-bridge-panel-pos';
     const STORAGE_AUTO = 'amq-bridge-auto-send';
     const STORAGE_COPY = 'amq-bridge-copy-last';
+    const STORAGE_RECV = 'amq-bridge-receive';
 
-    // Формат сообщений при ОТПРАВКЕ в чат (и при ЧТЕНИИ формата)
     const CHAT_PREFIX  = 'Answer: ';
 
     const DRAG_THRESHOLD       = 4;
     const COPY_ALL_DEBOUNCE_MS = 250;
-    const AUTOCOMPLETE_WAIT_MS = 100;
     const ECHO_WINDOW_MS       = 4000;
-
-    /* ============ Утилиты ============ */
 
     function findAnswerInput() {
         for (const sel of ANSWER_INPUT_SELECTORS) {
             const el = document.querySelector(sel);
             if (el) {
                 if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') {
-                    const inner = el.querySelector('input, textarea');
+                    const inner = el.querySelector('input[type="text"], input, textarea');
                     if (inner) return inner;
                 }
                 return el;
             }
         }
         return null;
+    }
+
+    function forceFocusAnswerInput() {
+        const ansInput = findAnswerInput();
+        if (!ansInput) return;
+        try {
+            ansInput.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            ansInput.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            ansInput.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            ansInput.focus();
+        } catch (e) {}
     }
 
     function pressEnter(el) {
@@ -80,7 +88,11 @@
         return cb ? cb.checked : false;
     }
 
-    // Извлечение чистого текста сообщения (без имени и времени)
+    function isReceiveEnabled() {
+        const cb = document.getElementById('amq-bridge-receive');
+        return cb ? cb.checked : (localStorage.getItem(STORAGE_RECV) !== 'false');
+    }
+
     function getMessageText(msgEl) {
         const textEl = msgEl.querySelector('.gcMessageText, .chatMessageText, .gcMessageContent');
         if (textEl) return textEl.textContent.trim();
@@ -100,8 +112,6 @@
         
         return msgEl.textContent.trim();
     }
-
-    /* ============ Анти-эхо ============ */
 
     const recentlySent = new Map();
 
@@ -143,16 +153,16 @@
         return false;
     }
 
-    /* ============ Отправка в чат ============ */
-
     function sendAnswerToChat(text) {
         const raw = (text || '').trim();
         if (!raw) return;
         const gcInput = document.querySelector(GC_INPUT);
         if (!gcInput) return;
 
-        // Отправляем строго в формате: Answer: <текст>
         const payload = CHAT_PREFIX + raw;
+        
+        const ansInput = findAnswerInput();
+        const wasFocused = ansInput && (document.activeElement === ansInput || ansInput.contains(document.activeElement));
         const prevActive = document.activeElement;
 
         gcInput.focus();
@@ -161,78 +171,67 @@
         gcInput.dispatchEvent(new Event('change', { bubbles: true }));
 
         markSent(payload);
-        markSent(raw); // Запоминаем и чистый текст
+        markSent(raw);
         
         setTimeout(() => {
             pressEnter(gcInput);
-            if (prevActive && prevActive.focus) {
-                setTimeout(() => prevActive.focus(), 10);
-            }
-        }, 30);
+            
+            setTimeout(() => {
+                if (wasFocused && ansInput) {
+                    forceFocusAnswerInput();
+                } else if (prevActive && prevActive.focus && prevActive !== document.body) {
+                    prevActive.focus();
+                }
+            }, 100);
+        }, 30); 
     }
 
-    /* ============ Single Enter ============ */
-
-    function getFirstSuggestionSync() {
-        try {
-            const instance = quiz?.answerInput?.typingInput?.autoCompleteController?.awesomepleteInstance;
-            return instance?.suggestions?.[0]?.value || '';
-        } catch (_) { return ''; }
-    }
-
-    function waitForSuggestion(maxTimeout = AUTOCOMPLETE_WAIT_MS) {
-        return new Promise(resolve => {
-            const ul = document.querySelector('#qpAnswerInputContainer .awesomplete ul');
-            if (!ul) { resolve(getFirstSuggestionSync()); return; }
-
-            const getFirst = () => ul.querySelector('li')?.textContent.trim() || getFirstSuggestionSync();
-            if (!ul.hasAttribute("hidden")) { resolve(getFirst()); return; }
-
-            const observer = new MutationObserver(() => {
-                if (!ul.hasAttribute("hidden")) finish(getFirst());
-            });
-
-            const finish = (val) => {
-                clearTimeout(timeout);
-                observer.disconnect();
-                resolve(val);
-            };
-
-            const timeout = setTimeout(() => finish(getFirst()), maxTimeout);
-            observer.observe(ul, { attributes: true, attributeFilter: ["hidden"] });
-        });
-    }
-
-    async function submitWithSingleEnter(fallbackText) {
+    function selectFirstSuggestionAndSubmit(fallbackText) {
         const ansInput = findAnswerInput();
         if (!ansInput) return;
-        let finalAnswer = (fallbackText || ansInput.value || '').trim();
-        if (!finalAnswer) return;
 
-        try {
-            const instance = quiz?.answerInput?.typingInput?.autoCompleteController?.awesomepleteInstance;
-            let highlighted = '';
-            if (instance?.$ul) {
-                highlighted = instance.$ul.children("li").filter('[aria-selected="true"]').text().trim();
-            }
-            let suggestion = highlighted;
-            if (!suggestion) suggestion = await waitForSuggestion(AUTOCOMPLETE_WAIT_MS);
-            if (suggestion) finalAnswer = suggestion;
-        } catch (err) {}
-
-        ansInput.value = finalAnswer;
+        ansInput.value = fallbackText;
         ansInput.dispatchEvent(new Event('input', { bubbles: true }));
 
-        try {
-            if (quiz?.answerInput?.submitAnswer) quiz.answerInput.submitAnswer(true);
-            const instance = quiz?.answerInput?.typingInput?.autoCompleteController?.awesomepleteInstance;
-            if (instance?.close) instance.close();
-        } catch (err) {}
+        setTimeout(() => {
+            try {
+                const instance = quiz?.answerInput?.typingInput?.autoCompleteController?.awesomepleteInstance;
+                let finalVal = fallbackText;
+
+                if (instance && instance.$ul && !instance.$ul.hasClass('hidden') && instance.suggestions && instance.suggestions.length > 0) {
+                    finalVal = instance.suggestions[0].value;
+                    ansInput.value = finalVal;
+                    ansInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
+                if (instance && typeof instance.close === 'function') {
+                    instance.close();
+                }
+
+                if (quiz && quiz.answerInput && typeof quiz.answerInput.submitAnswer === 'function') {
+                    quiz.answerInput.submitAnswer(true);
+                }
+            } catch (e) {}
+        }, 50);
     }
 
-    /* ============ Плавающая панель ============ */
-
     let panelMoved = false;
+
+    function togglePanel() {
+        let panel = document.getElementById(PANEL_ID);
+        if (!panel) {
+            createPanel();
+            panel = document.getElementById(PANEL_ID);
+        }
+        
+        if (panel) {
+            if (panel.style.display === 'none') {
+                panel.style.display = 'flex';
+            } else {
+                panel.style.display = 'none';
+            }
+        }
+    }
 
     function createPanel() {
         if (document.getElementById(PANEL_ID)) return;
@@ -244,13 +243,13 @@
             left: '20px',
             top: '20px',
             zIndex: '999999',
-            display: 'flex',
+            display: 'none',
             flexDirection: 'column',
             gap: '0',
             padding: '8px',
-            background: '#000000',
-            border: '1px solid #ffffff',
-            borderRadius: '6px',
+            background: '#333',
+            border: 'none',
+            borderRadius: '6px', 
             fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
             fontSize: '12px',
             color: '#ffffff',
@@ -281,7 +280,7 @@
             fontSize: '12px',
             fontWeight: '500',
             letterSpacing: '0.4px',
-            color: '#000000',
+            color: '#333',
             background: '#ffffff',
             border: '1px solid #ffffff',
             borderRadius: '4px',
@@ -289,13 +288,16 @@
             transition: 'background 0.12s ease, color 0.12s ease',
         });
         btn.addEventListener('mouseenter', () => {
-            btn.style.background = '#000000';
+            btn.style.background = '#333';
             btn.style.color = '#ffffff';
         });
         btn.addEventListener('mouseleave', () => {
             btn.style.background = '#ffffff';
-            btn.style.color = '#000000';
+            btn.style.color = '#333';
         });
+        
+        btn.addEventListener('mousedown', e => e.preventDefault());
+
         btn.addEventListener('click', (e) => {
             if (panelMoved) return;
             e.preventDefault();
@@ -314,7 +316,7 @@
             fontSize: '12px',
             fontWeight: '500',
             color: '#ffffff',
-            background: '#000000',
+            background: '#333',
             border: '1px solid #ffffff',
             borderRadius: '4px',
             cursor: 'pointer',
@@ -322,6 +324,7 @@
             width: '28px',
             textAlign: 'center'
         });
+        btnToggle.addEventListener('mousedown', e => e.preventDefault());
         btnToggle.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -344,19 +347,27 @@
             gap: '4px',
             marginTop: '8px',
             paddingTop: '8px',
-            borderTop: '1px solid rgba(255,255,255,0.2)',
+            borderTop: '1px solid rgba(255,255,255,0.15)',
         });
 
+        const labelStyle = 'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;';
+        const cbStyle = 'margin:0;cursor:pointer; width: 15px; height: 15px;';
+
         const autoLabel = document.createElement('label');
-        autoLabel.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;';
-        autoLabel.innerHTML = `<input type="checkbox" id="amq-bridge-auto-send" style="margin:0;cursor:pointer;"> Auto Send`;
+        autoLabel.style.cssText = labelStyle;
+        autoLabel.innerHTML = `<input type="checkbox" id="amq-bridge-auto-send" style="${cbStyle}"> Auto Send`;
 
         const copyLabel = document.createElement('label');
-        copyLabel.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;';
-        copyLabel.innerHTML = `<input type="checkbox" id="amq-bridge-copy-last" style="margin:0;cursor:pointer;"> Copy last message`;
+        copyLabel.style.cssText = labelStyle;
+        copyLabel.innerHTML = `<input type="checkbox" id="amq-bridge-copy-last" style="${cbStyle}"> Copy last message`;
+
+        const receiveLabel = document.createElement('label');
+        receiveLabel.style.cssText = labelStyle;
+        receiveLabel.innerHTML = `<input type="checkbox" id="amq-bridge-receive" style="${cbStyle}"> Receive Answers`;
 
         settings.appendChild(autoLabel);
         settings.appendChild(copyLabel);
+        settings.appendChild(receiveLabel);
 
         panel.appendChild(header);
         panel.appendChild(settings);
@@ -364,10 +375,15 @@
 
         const cbAuto = document.getElementById('amq-bridge-auto-send');
         const cbCopy = document.getElementById('amq-bridge-copy-last');
+        const cbRecv = document.getElementById('amq-bridge-receive');
+
         cbAuto.checked = localStorage.getItem(STORAGE_AUTO) === 'true';
         cbCopy.checked = localStorage.getItem(STORAGE_COPY) === 'true';
+        cbRecv.checked = localStorage.getItem(STORAGE_RECV) !== 'false';
+
         cbAuto.addEventListener('change', () => localStorage.setItem(STORAGE_AUTO, cbAuto.checked));
         cbCopy.addEventListener('change', () => localStorage.setItem(STORAGE_COPY, cbCopy.checked));
+        cbRecv.addEventListener('change', () => localStorage.setItem(STORAGE_RECV, cbRecv.checked));
 
         let dragging = false, offsetX = 0, offsetY = 0;
         const onMouseMove = (e) => {
@@ -406,8 +422,14 @@
 
         panel.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return;
-            panelMoved = false;
+            
+            if (e.target.closest('button')) {
+                e.preventDefault();
+            }
+
             if (e.target.closest('button, label, input')) return;
+            
+            panelMoved = false;
             dragging = true;
             const rect = panel.getBoundingClientRect();
             offsetX = e.clientX - rect.left;
@@ -425,16 +447,64 @@
         }, true);
     }
 
-    createPanel();
+    function injectCoopButton() {
+        if (document.getElementById("qpCoop")) return;
+        const $container = $("#qpOptionContainer");
+        if ($container.length === 0) return;
+        
+        const $settings = $("#qpSettings");
+        if ($settings.length === 0) return; 
 
-    /* ============ Auto Send ============ */
+        const s = window.getComputedStyle($settings[0]);
+
+        const svgIcon = `
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" style="pointer-events: none;">
+                <path d="M5 8 L19 8 M15 4 L19 8 L15 12" />
+                <path d="M19 16 L5 16 M9 12 L5 16 L9 20" />
+            </svg>
+        `;
+
+        const $btn = $("<div>", { id: "qpCoop", class: "clickAble qpOption" })
+            .css({
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: s.margin,
+                padding: s.padding,
+                width: s.width !== 'auto' ? s.width : '35px',
+                height: s.height !== 'auto' ? s.height : '100%',
+                boxSizing: "border-box"
+            })
+            .append(svgIcon)
+            .on("click", (e) => {
+                e.preventDefault();
+                togglePanel();
+            })
+            .on("mousedown", (e) => {
+                e.preventDefault(); 
+            })
+            .popover({
+                content: "Coop Mode",
+                trigger: "hover",
+                placement: "bottom"
+            });
+
+        $container.width((index, w) => w + 35);
+        $container.children("div").first().append($btn);
+    }
+
+    createPanel();
+    setInterval(injectCoopButton, 1000);
+    injectCoopButton();
 
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.keyCode !== 13) return;
         if (!isAutoSendEnabled()) return;
 
         const input = findAnswerInput();
-        if (!input || e.target !== input) return;
+        if (!input) return;
+        
+        if (e.target !== input && !input.contains(e.target)) return;
 
         let textToSend = '';
         try {
@@ -453,8 +523,6 @@
             setTimeout(() => sendAnswerToChat(textToSend), 50);
         }
     }, true);
-
-    /* ============ Reader ============ */
 
     function findChatContainer() {
         return (
@@ -479,47 +547,41 @@
                 if (processed.has(msgEl)) return;
                 processed.add(msgEl);
 
-                // 1. Игнорируем свои сообщения
+                if (!isReceiveEnabled()) return;
                 if (isOwnMessage(msgEl)) return;
 
-                // 2. Извлекаем текст
                 let text = getMessageText(msgEl);
                 if (!text) return;
 
-                // 3. Проверяем, есть ли формат "Answer: "
-                const hasFormat = text.startsWith(CHAT_PREFIX);
-
-                if (hasFormat) {
-                    // Отрезаем префикс
-                    text = text.substring(CHAT_PREFIX.length).trim();
+                const match = text.match(/Answer:\s*(.*)/i);
+                let extracted = "";
+                
+                if (match) {
+                    extracted = match[1].trim();
                 } else {
-                    // Если префикса нет, проверяем включена ли галочка Copy last message
                     if (!isCopyLastEnabled()) return;
+                    extracted = text;
                 }
 
-                if (!text) return;
-
-                // 4. Проверка на эхо
-                if (wasRecentlySent(text)) return;
+                if (!extracted) return;
+                if (wasRecentlySent(extracted)) return;
 
                 const ansInput = findAnswerInput();
                 if (!ansInput) return;
+                
+                const wasFocused = document.activeElement === ansInput || ansInput.contains(document.activeElement);
 
-                // Вставляем в поле
-                ansInput.value = text;
+                ansInput.value = extracted;
                 ansInput.dispatchEvent(new Event('input', { bubbles: true }));
+                if (wasFocused) forceFocusAnswerInput();
 
-                // Дебаунс на отправку
                 if (copyLastTimer) clearTimeout(copyLastTimer);
                 copyLastTimer = setTimeout(() => {
                     copyLastTimer = null;
-                    const latest = findAnswerInput()?.value || text;
-                    submitWithSingleEnter(latest);
+                    selectFirstSuggestionAndSubmit(extracted);
                 }, COPY_ALL_DEBOUNCE_MS);
 
-            } catch (err) {
-                console.error('[AMQ Bridge] Error processing message:', err);
-            }
+            } catch (err) {}
         };
 
         const observer = new MutationObserver((mutations) => {
