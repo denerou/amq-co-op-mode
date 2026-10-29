@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         AMQ Co-op Mode
-// @namespace    https://github.com/denerou/AMQ_Coop_Mode
+// @namespace    https://github.com/denerou/amq-co-op-mode.user.js
 // @version      1.0.0
 // @description  
 // @author       denerou
@@ -9,10 +9,8 @@
 // @match        https://*.animemusicquiz.com/*
 // @grant        none
 // @run-at       document-end
-// @homepageURL  https://github.com/denerou/AMQ_Coop_Mode
-// @supportURL   https://github.com/denerou/AMQ_Coop_Mode/issues
-// @updateURL    https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/coopmode.user.js
-// @downloadURL  https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/coopmode.user.js
+// @updateURL    https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/amq-co-op-mode.user.js
+// @downloadURL  https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/amq-co-op-mode.user.js
 // ==/UserScript==
 
 (function () {
