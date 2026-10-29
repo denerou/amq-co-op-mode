@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         AMQ Answer Bridge
-// @namespace    https://github.com/<your-username>/amq-answer-bridge
-// @version      2.1
+// @name         AMQ Coop Mode
+// @namespace    https://github.com/denerou/AMQ_Coop_Mode
+// @version      2.3
 // @description  
 // @author       denero
 // @license      MIT
@@ -9,10 +9,10 @@
 // @match        https://*.animemusicquiz.com/*
 // @grant        none
 // @run-at       document-end
-// @homepageURL  https://github.com/denerou/amq-answer-bridge
-// @supportURL   https://github.com/denerou/amq-answer-bridge/issues
-// @updateURL    https://raw.githubusercontent.com/denerou/amq-answer-bridge/main/amq-answer-bridge.user.js
-// @downloadURL  https://raw.githubusercontent.com/denerou/amq-answer-bridge/main/amq-answer-bridge.user.js
+// @homepageURL  https://github.com/denerou/AMQ_Coop_Mode
+// @supportURL   https://github.com/denerou/AMQ_Coop_Mode/issues
+// @updateURL    https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/coopmode.user.js
+// @downloadURL  https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/coopmode.user.js
 // ==/UserScript==
 
 (function () {
@@ -35,9 +35,8 @@
     const STORAGE_AUTO = 'amq-bridge-auto-send';
     const STORAGE_COPY = 'amq-bridge-copy-last';
 
-    // Формат сообщений при ОТПРАВКЕ в чат
+    // Формат сообщений при ОТПРАВКЕ в чат (и при ЧТЕНИИ формата)
     const CHAT_PREFIX  = 'Answer: ';
-    const CHAT_SUFFIX  = ' test';
 
     const DRAG_THRESHOLD       = 4;
     const COPY_ALL_DEBOUNCE_MS = 250;
@@ -152,8 +151,8 @@
         const gcInput = document.querySelector(GC_INPUT);
         if (!gcInput) return;
 
-        // Отправляем в формате: Answer: <текст> test
-        const payload = CHAT_PREFIX + raw + CHAT_SUFFIX;
+        // Отправляем строго в формате: Answer: <текст>
+        const payload = CHAT_PREFIX + raw;
         const prevActive = document.activeElement;
 
         gcInput.focus();
@@ -162,6 +161,7 @@
         gcInput.dispatchEvent(new Event('change', { bubbles: true }));
 
         markSent(payload);
+        markSent(raw); // Запоминаем и чистый текст
         
         setTimeout(() => {
             pressEnter(gcInput);
@@ -482,15 +482,25 @@
                 // 1. Игнорируем свои сообщения
                 if (isOwnMessage(msgEl)) return;
 
-                // 2. Извлекаем текст (без имени отправителя)
-                const text = getMessageText(msgEl);
+                // 2. Извлекаем текст
+                let text = getMessageText(msgEl);
                 if (!text) return;
 
-                // 3. Проверка на эхо
-                if (wasRecentlySent(text)) return;
+                // 3. Проверяем, есть ли формат "Answer: "
+                const hasFormat = text.startsWith(CHAT_PREFIX);
 
-                // 4. Если галочка выключена, ничего не копируем
-                if (!isCopyLastEnabled()) return;
+                if (hasFormat) {
+                    // Отрезаем префикс
+                    text = text.substring(CHAT_PREFIX.length).trim();
+                } else {
+                    // Если префикса нет, проверяем включена ли галочка Copy last message
+                    if (!isCopyLastEnabled()) return;
+                }
+
+                if (!text) return;
+
+                // 4. Проверка на эхо
+                if (wasRecentlySent(text)) return;
 
                 const ansInput = findAnswerInput();
                 if (!ansInput) return;
@@ -499,7 +509,7 @@
                 ansInput.value = text;
                 ansInput.dispatchEvent(new Event('input', { bubbles: true }));
 
-                // Дебаунс на отправку (если придет новое сообщение, оно заменит текущее)
+                // Дебаунс на отправку
                 if (copyLastTimer) clearTimeout(copyLastTimer);
                 copyLastTimer = setTimeout(() => {
                     copyLastTimer = null;
