@@ -357,7 +357,7 @@
 
         const copyLabel = document.createElement('label');
         copyLabel.style.cssText = labelStyle;
-        copyLabel.innerHTML = `<input type="checkbox" id="amq-bridge-copy-last" style="${cbStyle}"> Copy last message`;
+        copyLabel.innerHTML = `<input type="checkbox" id="amq-bridge-copy-last" style="${cbStyle}"> Copy Last Message`;
 
         const receiveLabel = document.createElement('label');
         receiveLabel.style.cssText = labelStyle;
