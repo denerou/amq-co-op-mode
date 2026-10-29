@@ -9,8 +9,8 @@
 // @match        https://*.animemusicquiz.com/*
 // @grant        none
 // @run-at       document-end
-// @updateURL    https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/amq-co-op-mode.user.js
-// @downloadURL  https://raw.githubusercontent.com/denerou/AMQ_Coop_Mode/main/amq-co-op-mode.user.js
+// @updateURL    https://raw.githubusercontent.com/denerou/amq-co-op-mode/main/amq-co-op-mode.user.js
+// @downloadURL  https://raw.githubusercontent.com/denerou/amq-co-op-mode/main/amq-co-op-mode.user.js
 // ==/UserScript==
 
 (function () {
