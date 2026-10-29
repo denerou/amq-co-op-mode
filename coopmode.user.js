@@ -1,13 +1,18 @@
 // ==UserScript==
 // @name         AMQ Answer Bridge
 // @namespace    https://github.com/<your-username>/amq-answer-bridge
-// @version      1.7
-// @description  Плавающая панель: Send Answer + Auto Send + Copy All Messages. Без префикса "Answer:". Собственные сообщения не дублируются в поле ответа.
-// @author       <your-username>
+// @version      2.1
+// @description  
+// @author       denero
 // @license      MIT
 // @match        https://animemusicquiz.com/*
+// @match        https://*.animemusicquiz.com/*
 // @grant        none
 // @run-at       document-end
+// @homepageURL  https://github.com/denerou/amq-answer-bridge
+// @supportURL   https://github.com/denerou/amq-answer-bridge/issues
+// @updateURL    https://raw.githubusercontent.com/denerou/amq-answer-bridge/main/amq-answer-bridge.user.js
+// @downloadURL  https://raw.githubusercontent.com/denerou/amq-answer-bridge/main/amq-answer-bridge.user.js
 // ==/UserScript==
 
 (function () {
@@ -28,12 +33,16 @@
     const PANEL_ID     = 'amq-bridge-panel';
     const STORAGE_POS  = 'amq-bridge-panel-pos';
     const STORAGE_AUTO = 'amq-bridge-auto-send';
-    const STORAGE_COPY = 'amq-bridge-copy-all';
+    const STORAGE_COPY = 'amq-bridge-copy-last';
+
+    // Формат сообщений при ОТПРАВКЕ в чат
+    const CHAT_PREFIX  = 'Answer: ';
+    const CHAT_SUFFIX  = ' test';
 
     const DRAG_THRESHOLD       = 4;
     const COPY_ALL_DEBOUNCE_MS = 250;
     const AUTOCOMPLETE_WAIT_MS = 100;
-    const ECHO_WINDOW_MS       = 3000; // сколько помним свои отправленные тексты
+    const ECHO_WINDOW_MS       = 4000;
 
     /* ============ Утилиты ============ */
 
@@ -67,20 +76,40 @@
         return cb ? cb.checked : false;
     }
 
-    function isCopyAllEnabled() {
-        const cb = document.getElementById('amq-bridge-copy-all');
+    function isCopyLastEnabled() {
+        const cb = document.getElementById('amq-bridge-copy-last');
         return cb ? cb.checked : false;
     }
 
-    /* ============ Анти-эхо для собственных сообщений ============ */
+    // Извлечение чистого текста сообщения (без имени и времени)
+    function getMessageText(msgEl) {
+        const textEl = msgEl.querySelector('.gcMessageText, .chatMessageText, .gcMessageContent');
+        if (textEl) return textEl.textContent.trim();
+        
+        const nameEl = msgEl.querySelector('.gcMessageName, .chatMessageName');
+        if (nameEl && msgEl.contains(nameEl)) {
+            const fullText = msgEl.textContent.trim();
+            const nameText = nameEl.textContent.trim();
+            let text = fullText;
+            const idx = text.indexOf(nameText);
+            if (idx !== -1) {
+                text = text.substring(idx + nameText.length);
+            }
+            text = text.replace(/^\s*:\s*/, '');
+            return text.trim();
+        }
+        
+        return msgEl.textContent.trim();
+    }
 
-    const recentlySent = new Map(); // text -> timestamp
+    /* ============ Анти-эхо ============ */
+
+    const recentlySent = new Map();
 
     function markSent(text) {
         const t = (text || '').trim();
         if (!t) return;
         recentlySent.set(t, Date.now());
-        // подчищаем старые записи
         const now = Date.now();
         for (const [k, ts] of recentlySent) {
             if (now - ts > ECHO_WINDOW_MS) recentlySent.delete(k);
@@ -96,30 +125,22 @@
         return false;
     }
 
-    /**
-     * Определяем, является ли сообщение "своим".
-     * AMQ помечает свои сообщения одним из классов, но на разных версиях бывает по-разному,
-     * поэтому пробуем несколько вариантов + fallback на сравнение имени отправителя.
-     */
     function isOwnMessage(msgEl) {
         if (!msgEl) return false;
         const ownClasses = ['self', 'own', 'gcMessageSelf', 'selfMessage', 'myMessage'];
-
         if (ownClasses.some(c => msgEl.classList.contains(c))) return true;
-        if (msgEl.parentElement &&
-            ownClasses.some(c => msgEl.parentElement.classList.contains(c))) return true;
+        if (msgEl.parentElement && ownClasses.some(c => msgEl.parentElement.classList.contains(c))) return true;
 
-        // Fallback: сравнить имя отправителя с собственным
         try {
             const ownName = quiz?.ownName || window.quiz?.ownName;
             if (ownName) {
-                const nameEl = msgEl.querySelector(
-                    '.gcMessageName, .chatMessageName, .gcMessageSender, .gcMessageAuthor'
-                );
-                if (nameEl && nameEl.textContent.trim() === ownName) return true;
+                const nameEl = msgEl.querySelector('.gcMessageName, .chatMessageName, .gcMessageSender, .gcMessageAuthor');
+                if (nameEl) {
+                    const cleanName = nameEl.textContent.replace(/:\s*$/, '').trim();
+                    if (cleanName === ownName) return true;
+                }
             }
         } catch (_) {}
-
         return false;
     }
 
@@ -129,18 +150,28 @@
         const raw = (text || '').trim();
         if (!raw) return;
         const gcInput = document.querySelector(GC_INPUT);
-        if (!gcInput) { console.warn('[AMQ Bridge] #gcInput не найден'); return; }
+        if (!gcInput) return;
+
+        // Отправляем в формате: Answer: <текст> test
+        const payload = CHAT_PREFIX + raw + CHAT_SUFFIX;
+        const prevActive = document.activeElement;
 
         gcInput.focus();
-        gcInput.value = raw; // без префикса
+        gcInput.value = payload;
         gcInput.dispatchEvent(new Event('input',  { bubbles: true }));
         gcInput.dispatchEvent(new Event('change', { bubbles: true }));
 
-        markSent(raw);
-        setTimeout(() => pressEnter(gcInput), 30);
+        markSent(payload);
+        
+        setTimeout(() => {
+            pressEnter(gcInput);
+            if (prevActive && prevActive.focus) {
+                setTimeout(() => prevActive.focus(), 10);
+            }
+        }, 30);
     }
 
-    /* ============ Single Enter (из приложенного скрипта) ============ */
+    /* ============ Single Enter ============ */
 
     function getFirstSuggestionSync() {
         try {
@@ -154,13 +185,11 @@
             const ul = document.querySelector('#qpAnswerInputContainer .awesomplete ul');
             if (!ul) { resolve(getFirstSuggestionSync()); return; }
 
-            const getFirst = () =>
-                ul.querySelector('li')?.textContent.trim() || getFirstSuggestionSync();
-
-            if (!ul.hasAttribute('hidden')) { resolve(getFirst()); return; }
+            const getFirst = () => ul.querySelector('li')?.textContent.trim() || getFirstSuggestionSync();
+            if (!ul.hasAttribute("hidden")) { resolve(getFirst()); return; }
 
             const observer = new MutationObserver(() => {
-                if (!ul.hasAttribute('hidden')) finish(getFirst());
+                if (!ul.hasAttribute("hidden")) finish(getFirst());
             });
 
             const finish = (val) => {
@@ -170,35 +199,26 @@
             };
 
             const timeout = setTimeout(() => finish(getFirst()), maxTimeout);
-            observer.observe(ul, { attributes: true, attributeFilter: ['hidden'] });
+            observer.observe(ul, { attributes: true, attributeFilter: ["hidden"] });
         });
     }
 
     async function submitWithSingleEnter(fallbackText) {
         const ansInput = findAnswerInput();
         if (!ansInput) return;
-
         let finalAnswer = (fallbackText || ansInput.value || '').trim();
         if (!finalAnswer) return;
 
         try {
             const instance = quiz?.answerInput?.typingInput?.autoCompleteController?.awesomepleteInstance;
-
             let highlighted = '';
             if (instance?.$ul) {
-                highlighted = instance.$ul
-                    .children('li')
-                    .filter('[aria-selected="true"]')
-                    .text()
-                    .trim();
+                highlighted = instance.$ul.children("li").filter('[aria-selected="true"]').text().trim();
             }
-
             let suggestion = highlighted;
             if (!suggestion) suggestion = await waitForSuggestion(AUTOCOMPLETE_WAIT_MS);
             if (suggestion) finalAnswer = suggestion;
-        } catch (err) {
-            console.warn('[AMQ Bridge] suggestion lookup failed:', err);
-        }
+        } catch (err) {}
 
         ansInput.value = finalAnswer;
         ansInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -207,9 +227,7 @@
             if (quiz?.answerInput?.submitAnswer) quiz.answerInput.submitAnswer(true);
             const instance = quiz?.answerInput?.typingInput?.autoCompleteController?.awesomepleteInstance;
             if (instance?.close) instance.close();
-        } catch (err) {
-            console.warn('[AMQ Bridge] submit failed:', err);
-        }
+        } catch (err) {}
     }
 
     /* ============ Плавающая панель ============ */
@@ -226,10 +244,10 @@
             left: '20px',
             top: '20px',
             zIndex: '999999',
-            display: 'inline-flex',
+            display: 'flex',
             flexDirection: 'column',
-            gap: '6px',
-            padding: '8px 10px',
+            gap: '0',
+            padding: '8px',
             background: '#000000',
             border: '1px solid #ffffff',
             borderRadius: '6px',
@@ -249,6 +267,9 @@
                 panel.style.top  = saved.y + 'px';
             }
         } catch (_) {}
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex; align-items:center; gap:6px;';
 
         const btn = document.createElement('button');
         btn.id = 'amq-bridge-btn';
@@ -285,31 +306,70 @@
             sendAnswerToChat(text);
         });
 
+        const btnToggle = document.createElement('button');
+        btnToggle.textContent = '▼';
+        Object.assign(btnToggle.style, {
+            padding: '4px 8px',
+            fontFamily: 'inherit',
+            fontSize: '12px',
+            fontWeight: '500',
+            color: '#ffffff',
+            background: '#000000',
+            border: '1px solid #ffffff',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            lineHeight: '1',
+            width: '28px',
+            textAlign: 'center'
+        });
+        btnToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (settings.style.display === 'none' || settings.style.display === '') {
+                settings.style.display = 'flex';
+                btnToggle.textContent = '▲';
+            } else {
+                settings.style.display = 'none';
+                btnToggle.textContent = '▼';
+            }
+        });
+
+        header.appendChild(btn);
+        header.appendChild(btnToggle);
+
+        const settings = document.createElement('div');
+        Object.assign(settings.style, {
+            display: 'none',
+            flexDirection: 'column',
+            gap: '4px',
+            marginTop: '8px',
+            paddingTop: '8px',
+            borderTop: '1px solid rgba(255,255,255,0.2)',
+        });
+
         const autoLabel = document.createElement('label');
-        autoLabel.style.cssText =
-            'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;';
+        autoLabel.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;';
         autoLabel.innerHTML = `<input type="checkbox" id="amq-bridge-auto-send" style="margin:0;cursor:pointer;"> Auto Send`;
 
         const copyLabel = document.createElement('label');
-        copyLabel.style.cssText =
-            'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;';
-        copyLabel.innerHTML = `<input type="checkbox" id="amq-bridge-copy-all" style="margin:0;cursor:pointer;"> Copy All Messages`;
+        copyLabel.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;';
+        copyLabel.innerHTML = `<input type="checkbox" id="amq-bridge-copy-last" style="margin:0;cursor:pointer;"> Copy last message`;
 
-        panel.appendChild(btn);
-        panel.appendChild(autoLabel);
-        panel.appendChild(copyLabel);
+        settings.appendChild(autoLabel);
+        settings.appendChild(copyLabel);
+
+        panel.appendChild(header);
+        panel.appendChild(settings);
         document.body.appendChild(panel);
 
         const cbAuto = document.getElementById('amq-bridge-auto-send');
-        const cbCopy = document.getElementById('amq-bridge-copy-all');
+        const cbCopy = document.getElementById('amq-bridge-copy-last');
         cbAuto.checked = localStorage.getItem(STORAGE_AUTO) === 'true';
         cbCopy.checked = localStorage.getItem(STORAGE_COPY) === 'true';
         cbAuto.addEventListener('change', () => localStorage.setItem(STORAGE_AUTO, cbAuto.checked));
         cbCopy.addEventListener('change', () => localStorage.setItem(STORAGE_COPY, cbCopy.checked));
 
-        // Перетаскивание панели
         let dragging = false, offsetX = 0, offsetY = 0;
-
         const onMouseMove = (e) => {
             if (!dragging) return;
             if (Math.abs(e.clientX - panel._startX) > DRAG_THRESHOLD ||
@@ -367,7 +427,7 @@
 
     createPanel();
 
-    /* ============ Auto Send: перехват Enter в поле ответа ============ */
+    /* ============ Auto Send ============ */
 
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.keyCode !== 13) return;
@@ -376,14 +436,22 @@
         const input = findAnswerInput();
         if (!input || e.target !== input) return;
 
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        e.stopPropagation();
+        let textToSend = '';
+        try {
+            const instance = quiz?.answerInput?.typingInput?.autoCompleteController?.awesomepleteInstance;
+            if (instance?.$ul) {
+                const highlighted = instance.$ul.children("li").filter('[aria-selected="true"]').text().trim();
+                if (highlighted) textToSend = highlighted;
+            }
+        } catch (_) {}
 
-        const text = (input.value || '').trim();
-        if (!text) return;
+        if (!textToSend) {
+            textToSend = (input.value || '').trim();
+        }
 
-        sendAnswerToChat(text);
+        if (textToSend) {
+            setTimeout(() => sendAnswerToChat(textToSend), 50);
+        }
     }, true);
 
     /* ============ Reader ============ */
@@ -398,7 +466,7 @@
         );
     }
 
-    let copyAllTimer = null;
+    let copyLastTimer = null;
 
     function setupReader() {
         const container = findChatContainer();
@@ -407,36 +475,41 @@
         const processed = new WeakSet();
 
         const processMessage = async (msgEl) => {
-            if (processed.has(msgEl)) return;
-            processed.add(msgEl);
+            try {
+                if (processed.has(msgEl)) return;
+                processed.add(msgEl);
 
-            // 1. Свои сообщения пропускаем полностью
-            if (isOwnMessage(msgEl)) return;
+                // 1. Игнорируем свои сообщения
+                if (isOwnMessage(msgEl)) return;
 
-            // 2. Текст без префикса — целиком
-            const text = (msgEl.textContent || '').trim();
-            if (!text) return;
+                // 2. Извлекаем текст (без имени отправителя)
+                const text = getMessageText(msgEl);
+                if (!text) return;
 
-            // 3. Анти-эхо: если этот текст недавно сами отправили — пропускаем
-            if (wasRecentlySent(text)) return;
+                // 3. Проверка на эхо
+                if (wasRecentlySent(text)) return;
 
-            // 4. Reader работает только при включённом Copy All
-            if (!isCopyAllEnabled()) return;
+                // 4. Если галочка выключена, ничего не копируем
+                if (!isCopyLastEnabled()) return;
 
-            const ansInput = findAnswerInput();
-            if (!ansInput) return;
+                const ansInput = findAnswerInput();
+                if (!ansInput) return;
 
-            // Показываем сразу в поле
-            ansInput.value = text;
-            ansInput.dispatchEvent(new Event('input', { bubbles: true }));
+                // Вставляем в поле
+                ansInput.value = text;
+                ansInput.dispatchEvent(new Event('input', { bubbles: true }));
 
-            // Дебаунс на отправку — если прилетит новее, заменим
-            if (copyAllTimer) clearTimeout(copyAllTimer);
-            copyAllTimer = setTimeout(() => {
-                copyAllTimer = null;
-                const latest = findAnswerInput()?.value || text;
-                submitWithSingleEnter(latest);
-            }, COPY_ALL_DEBOUNCE_MS);
+                // Дебаунс на отправку (если придет новое сообщение, оно заменит текущее)
+                if (copyLastTimer) clearTimeout(copyLastTimer);
+                copyLastTimer = setTimeout(() => {
+                    copyLastTimer = null;
+                    const latest = findAnswerInput()?.value || text;
+                    submitWithSingleEnter(latest);
+                }, COPY_ALL_DEBOUNCE_MS);
+
+            } catch (err) {
+                console.error('[AMQ Bridge] Error processing message:', err);
+            }
         };
 
         const observer = new MutationObserver((mutations) => {
